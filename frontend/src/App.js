@@ -1,290 +1,310 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import './App.css';
 
-// --- CONFIGURATION DE L'INSTANCE API ---
-// Remplace ton instance axios actuelle par celle-ci :
-const API_URL = window.location.hostname === "localhost" 
+// Configuration de l'instance API
+const BASE_URL = window.location.hostname === "localhost" 
   ? "http://localhost:8000/api/" 
-  : "https://ton-app-sur-render.onrender.com/api/"; // Remplace par ton URL Render
+  : "https://ton-app-sur-render.onrender.com/api/";
 
-const api = axios.create({
-  baseURL: API_URL,
-});
+const api = axios.create({ baseURL: BASE_URL });
 
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('access');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
+  if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
 
 function App() {
-  // --- ÉTATS ---
+  // États globaux
   const [isLoggedIn, setIsLoggedIn] = useState(!!localStorage.getItem('access'));
-  const [isRegistering, setIsRegistering] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [activeTab, setActiveTab] = useState('vault');
   const [todos, setTodos] = useState([]);
-  const [categories, setCategories] = useState([]);
+  const [clients, setClients] = useState([]);
+  const [invoices, setInvoices] = useState([]);
 
-  // États des formulaires
+  // États Formulaires Vault
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [email, setEmail] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('');
-  const [catName, setCatName] = useState('');
-  const [catColor, setCatColor] = useState('#6366f1');
   const [searchTerm, setSearchTerm] = useState('');
-  const [errorMsg, setErrorMsg] = useState('');
 
-  // --- ACTIONS CRUD ---
+  // États Formulaires Billing
+  const [clientName, setClientName] = useState('');
+  const [clientEmail, setClientEmail] = useState('');
+  const [clientAddress, setClientAddress] = useState('');
+  const [showClientForm, setShowClientForm] = useState(false);
+  const [selectedClientForInvoice, setSelectedClientForInvoice] = useState(null);
+  const [invoiceAmount, setInvoiceAmount] = useState('');
+  const [invoiceLabel, setInvoiceLabel] = useState('');
 
-  const fetchTodos = useCallback(async () => {
+  // --- RÉCUPÉRATION DES DONNÉES ---
+  const fetchData = useCallback(async () => {
     try {
-      const response = await api.get('todos/');
-      setTodos(response.data);
-    } catch (error) {
+      const [t, cl, inv] = await Promise.all([
+        api.get('todos/'), 
+        api.get('billing/clients/'), 
+        api.get('billing/invoices/')
+      ]);
+      setTodos(t.data); 
+      setClients(cl.data); 
+      setInvoices(inv.data);
+    } catch (error) { 
       if (error.response?.status === 401) handleLogout();
     }
   }, []);
 
-  const fetchCategories = useCallback(async () => {
-    try {
-      const response = await api.get('categories/');
-      setCategories(response.data);
-    } catch (error) {
-      console.error("Erreur catégories:", error);
-    }
-  }, []);
+  useEffect(() => { if (isLoggedIn) fetchData(); }, [isLoggedIn, fetchData]);
 
-  useEffect(() => {
-    if (isLoggedIn) {
-      fetchTodos();
-      fetchCategories();
-    }
-  }, [isLoggedIn, fetchTodos, fetchCategories]);
-
+  // --- AUTHENTIFICATION ---
   const handleLogin = async (e) => {
-    if (e) e.preventDefault();
+    e.preventDefault();
     try {
-      const response = await axios.post('http://localhost:8000/api/token/', { username, password });
-      localStorage.setItem('access', response.data.access);
-      localStorage.setItem('refresh', response.data.refresh);
+      const resp = await axios.post(`${BASE_URL}token/`, { username, password });
+      localStorage.setItem('access', resp.data.access);
       setIsLoggedIn(true);
-      setErrorMsg('');
-    } catch (error) {
-      setErrorMsg('Identifiants invalides.');
-    }
+    } catch (error) { alert('Identifiants invalides'); }
   };
 
-  const handleRegister = async (e) => {
-    e.preventDefault();
-    try {
-      await axios.post('http://localhost:8000/api/register/', { username, password, email });
-      handleLogin(); // Connecte l'utilisateur après l'inscription
-    } catch (error) {
-      setErrorMsg("Erreur d'inscription. L'utilisateur existe peut-être déjà.");
-    }
-  };
+  const handleLogout = () => { localStorage.clear(); setIsLoggedIn(false); };
 
-  const handleLogout = () => {
-    localStorage.removeItem('access');
-    localStorage.removeItem('refresh');
-    setIsLoggedIn(false);
-    setTodos([]);
-    setCategories([]);
-    setIsRegistering(false);
-  };
-
-  const addTodo = async (e) => {
-    e.preventDefault();
-    if (!title.trim()) return;
-    setIsSubmitting(true);
-    try {
-      await api.post('todos/', { 
-        title, 
-        description, 
-        completed: false,
-        category: selectedCategory || null 
-      });
-      setTitle('');
-      setDescription('');
-      setSelectedCategory('');
-      fetchTodos();
-    } catch (error) {
-      console.error('Erreur ajout:', error);
-    } finally {
-      setIsSubmitting(false);
-    }
-
-    const validateURL = (url) => {
-    const pattern = new RegExp('^(https?:\\/\\/)?'+ // protocole
-    '((([a-z\\d]([a-z\\d-]*[a-z\\d])*)\\.)+[a-z]{2,}|'+ // domaine
-    '((\\d{1,3}\\.){3}\\d{1,3}))'); // ou IP
-    return !!pattern.test(url);
-};
-
-      // Dans addTodo :
-    if (!validateURL(description)) { // Si tu utilises le champ description pour l'URL
-    setErrorMsg("Veuillez entrer une URL valide !");
-    return;
-}
-  };
-
-  const addCategory = async (e) => {
-    e.preventDefault();
-    try {
-      const response = await api.post('categories/', { name: catName, color: catColor });
-      setCategories([...categories, response.data]);
-      setCatName('');
-    } catch (error) {
-      console.error("Erreur catégorie:", error);
-    }
-  };
-
-  const deleteCategory = async (id) => {
-    if (!window.confirm("Supprimer cette catégorie ?")) return;
-    try {
-      await api.delete(`categories/${id}/`);
-      setCategories(categories.filter(cat => cat.id !== id));
-      fetchTodos();
-    } catch (error) {
-      console.error('Erreur suppression:', error);
-    }
-  };
-
+  // --- ACTIONS VAULT ---
   const deleteTodo = async (id) => {
-    try {
-      await api.delete(`todos/${id}/`);
-      fetchTodos();
-    } catch (error) {
-      console.error('Erreur suppression:', error);
+    if (window.confirm("Supprimer ce lien ?")) {
+      try {
+        await api.delete(`todos/${id}/`);
+        setTodos(todos.filter(t => t.id !== id));
+      } catch (error) { console.error(error); }
     }
   };
 
-  const toggleComplete = async (id, currentStatus) => {
+  // --- ACTIONS FACTURATION ---
+  const addClient = async (e) => {
+    e.preventDefault();
     try {
-      await api.patch(`todos/${id}/`, { completed: !currentStatus });
-      fetchTodos();
-    } catch (error) {
-      console.error('Erreur modification:', error);
-    }
+      await api.post('billing/clients/', { name: clientName, email: clientEmail, address: clientAddress });
+      setClientName(''); setClientEmail(''); setClientAddress('');
+      setShowClientForm(false);
+      fetchData();
+    } catch (error) { console.error("Erreur client:", error); }
   };
 
-  const filteredTodos = todos.filter((todo) => 
-    todo.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    todo.description.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const createInvoice = async (e) => {
+    e.preventDefault();
+    try {
+      await api.post('billing/invoices/', {
+        client: selectedClientForInvoice.id,
+        number: `INV-${Date.now()}`,
+        label: invoiceLabel,
+        total_ht: parseFloat(invoiceAmount),
+        status: 'PENDING'
+      });
+      setSelectedClientForInvoice(null); setInvoiceAmount(''); setInvoiceLabel('');
+      fetchData();
+    } catch (error) { alert("Erreur 500 : Vérifiez vos champs côté Django."); }
+  };
 
-  // --- RENDU FINAL ---
+  const markAsPaid = async (id) => {
+    try {
+      await api.patch(`billing/invoices/${id}/`, { status: 'PAID' });
+      fetchData();
+    } catch (error) { console.error(error); }
+  };
+
+  const downloadInvoicePDF = (inv) => {
+    const doc = new jsPDF();
+    const client = clients.find(c => c.id === inv.client) || { name: "Client Inconnu", email: "-", address: "" };
+    const primaryColor = [79, 70, 229];
+
+    doc.setFontSize(20); doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]); doc.setFont(undefined, 'bold');
+    doc.text("FACTURATION", 190, 15, { align: 'right' });
+
+    doc.setFontSize(24); doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]); doc.setFont(undefined, 'bold');
+    doc.text("LINKVAULT", 20, 25);
+
+    doc.setFontSize(10); doc.setTextColor(100); doc.setFont(undefined, 'normal');
+    doc.text("Société SARL", 20, 32);
+
+    doc.setFontSize(10); 
+    doc.setTextColor(100); 
+    doc.setFont(undefined, 'normal');
+
+    // Ta ligne actuelle
+    doc.text("SIRET: 123 456 789 00012", 20, 35);
+
+    // Nouvelles lignes (on descend de 6 en 6 sur l'axe Y)
+    doc.text(`N° Facture : ${inv.number}`, 20, 48);
+    doc.text(`Facture généré le : ${new Date(inv.created_at || Date.now()).toLocaleDateString()}`, 20, 52);
+
+    doc.setFontSize(11); doc.setTextColor(50); doc.text("FACTURÉ À :", 120, 46);
+    doc.setFont(undefined, 'bold'); doc.text(client.name.toUpperCase(), 120, 52);
+    doc.setFont(undefined, 'normal'); doc.text(client.email, 120, 58);
+
+    autoTable(doc, {
+      startY: 70,
+      head: [['Désignation', 'Qté', 'P.U. HT', 'Total HT']],
+      body: [[inv.label, "1", `${parseFloat(inv.total_ht).toFixed(2)} €`, `${parseFloat(inv.total_ht).toFixed(2)} €`]],
+      headStyles: { fillColor: primaryColor }
+    });
+
+    // On définit la position de départ (juste après le tableau)
+const finalY = doc.lastAutoTable.finalY + 10;
+
+doc.setFontSize(10);
+doc.setTextColor(100);
+doc.setFont(undefined, 'normal');
+
+// Ligne Total HT
+doc.text("Total HT :", 140, finalY);
+doc.text(`${parseFloat(inv.total_ht).toFixed(2)} €`, 190, finalY, { align: 'right' });
+
+// Ligne TVA (on descend de 7 unités)
+doc.text("TVA (20%) :", 140, finalY + 7);
+doc.text(`${(parseFloat(inv.total_ttc) - parseFloat(inv.total_ht)).toFixed(2)} €`, 190, finalY + 7, { align: 'right' });
+
+
+    doc.setFontSize(12); doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]); doc.text(`TOTAL TTC : ${parseFloat(inv.total_ttc).toFixed(2)} €`, 190, finalY + 18, { align: 'right' });
+    doc.save(`Facture_${inv.number}.pdf`);
+    
+  };
+
+  // --- RENDU LOGIN ---
+  if (!isLoggedIn) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <form className="p-10 bg-white rounded-2xl shadow-xl space-y-4" onSubmit={handleLogin}>
+          <h2 className="text-2xl font-bold">LinkVault Login</h2>
+          <input type="text" className="w-full p-3 border rounded-xl" placeholder="Admin" onChange={e => setUsername(e.target.value)} />
+          <input type="password" className="w-full p-3 border rounded-xl" placeholder="Mot de passe" onChange={e => setPassword(e.target.value)} />
+          <button className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold">Entrer</button>
+        </form>
+      </div>
+    );
+  }
+
+  // --- RENDU PRINCIPAL ---
   return (
-    <div className="min-h-screen bg-gray-50 antialiased text-gray-900">
-      {/* HEADER PERMANENT */}
-      <nav className="bg-white border-b py-4 px-6 flex justify-between items-center sticky top-0 z-10 shadow-sm">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center font-bold text-white">L</div>
-          <span className="text-xl font-bold text-gray-800">LinkVault</span>
+    <div className="min-h-screen bg-gray-50">
+      <nav className="bg-white border-b p-4 flex justify-between items-center shadow-sm">
+        <div className="flex gap-6 items-center">
+          <span className="font-bold text-indigo-600 text-xl">LINKVAULT</span>
+          <div className="flex bg-gray-100 p-1 rounded-lg">
+            <button onClick={() => setActiveTab('vault')} className={`px-4 py-1 rounded-md text-sm ${activeTab === 'vault' ? 'bg-white shadow text-indigo-600' : 'text-gray-500'}`}>Vault</button>
+            <button onClick={() => setActiveTab('billing')} className={`px-4 py-1 rounded-md text-sm ${activeTab === 'billing' ? 'bg-white shadow text-indigo-600' : 'text-gray-500'}`}>Facturation</button>
+          </div>
         </div>
-        {isLoggedIn && (
-          <button onClick={handleLogout} className="text-red-500 font-bold hover:bg-red-50 px-4 py-2 rounded-lg transition-colors">
-            Déconnexion
-          </button>
-        )}
+        <button onClick={handleLogout} className="text-red-500 font-bold">Quitter</button>
       </nav>
 
-      <main className="max-w-3xl mx-auto px-4 py-12">
-        {isLoggedIn ? (
-          /* --- DASHBOARD (SI CONNECTÉ) --- */
-          <>
-            {/* SECTION CATÉGORIES */}
-            <section className="bg-white rounded-3xl shadow-xl p-6 mb-8 border border-gray-100">
-              <h3 className="font-bold mb-4">Mes Catégories</h3>
-              <form onSubmit={addCategory} className="flex gap-4 mb-4">
-                <input type="text" placeholder="Nom" className="flex-1 px-4 py-2 bg-gray-50 border rounded-xl" value={catName} onChange={(e) => setCatName(e.target.value)} required />
-                <input type="color" className="w-12 h-10 border-none bg-transparent" value={catColor} onChange={(e) => setCatColor(e.target.value)} />
-                <button type="submit" className="px-6 py-2 bg-gray-800 text-white rounded-xl">Ajouter</button>
-              </form>
-              <div className="flex flex-wrap gap-2">
-                {categories.map(c => (
-                  <div key={c.id} className="flex items-center gap-2 px-3 py-1 rounded-full text-white text-xs font-bold shadow-sm" style={{backgroundColor: c.color}}>
-                    <span>{c.name}</span>
-                    <button onClick={() => deleteCategory(c.id)} className="bg-white/20 rounded-full w-4 h-4 flex items-center justify-center hover:bg-white/40">×</button>
-                  </div>
-                ))}
+      <main className="max-w-4xl mx-auto p-6">
+        {activeTab === 'vault' ? (
+          <div className="space-y-6">
+            <section className="bg-white rounded-3xl shadow-xl p-8 border border-gray-100">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <input type="text" placeholder="Titre du lien" className="px-4 py-3 bg-gray-50 border rounded-xl outline-none" value={title} onChange={(e) => setTitle(e.target.value)} />
+                <input type="text" placeholder="URL ou Note" className="px-4 py-3 bg-gray-50 border rounded-xl outline-none" value={description} onChange={(e) => setDescription(e.target.value)} />
               </div>
+              <button className="mt-4 w-full py-3 bg-indigo-600 text-white font-bold rounded-xl">Sauvegarder</button>
             </section>
-
-            {/* FORMULAIRE TODO */}
-            <section className="bg-white rounded-3xl shadow-xl p-8 mb-12 border border-gray-100">
-              <form onSubmit={addTodo} className="space-y-4">
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <input type="text" placeholder="Titre du lien" className="px-4 py-3 bg-gray-50 border rounded-xl" value={title} onChange={(e) => setTitle(e.target.value)} required />
-                  <input type="text" placeholder="Description" className="px-4 py-3 bg-gray-50 border rounded-xl" value={description} onChange={(e) => setDescription(e.target.value)} />
-                </div>
-                <select className="w-full px-4 py-3 bg-gray-50 border rounded-xl outline-none" value={selectedCategory} onChange={(e) => setSelectedCategory(e.target.value)}>
-                  <option value="">Choisir une catégorie (Optionnel)</option>
-                  {categories.map(cat => (
-                    <option key={cat.id} value={cat.id}>{cat.name}</option>
-                  ))}
-                </select>
-                <button type="submit" disabled={isSubmitting} className="w-full py-4 bg-indigo-600 text-white font-bold rounded-xl shadow-lg hover:bg-indigo-700">
-                  {isSubmitting ? 'Enregistrement...' : 'Sauvegarder le lien'}
-                </button>
-              </form>
-            </section>
-
-            {/* LISTE DES TODOS */}
-            <section className="space-y-4">
-              <input type="text" placeholder="Rechercher un lien..." className="w-full p-3 border rounded-xl mb-6 shadow-sm" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
-              {filteredTodos.map((todo) => {
-                const categoryInfo = categories.find(cat => cat.id === todo.category);
-                return (
-                  <div key={todo.id} className="flex items-center justify-between p-6 bg-white rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition-all">
-                    <div className="flex items-center gap-4">
-                      <button onClick={() => toggleComplete(todo.id, todo.completed)} className={`w-6 h-6 rounded-full border-2 ${todo.completed ? 'bg-green-500 border-green-500' : 'border-gray-300'}`} />
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h4 className={`font-bold ${todo.completed ? 'line-through text-gray-300' : ''}`}>{todo.title}</h4>
-                          {categoryInfo && (
-                            <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase text-white shadow-sm" style={{ backgroundColor: categoryInfo.color }}>
-                              {categoryInfo.name}
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-sm text-gray-500">{todo.description}</p>
-                      </div>
-                    </div>
-                    <button onClick={() => deleteTodo(todo.id)} className="text-red-300 hover:text-red-500 font-bold">Supprimer</button>
-                  </div>
-                );
-              })}
-            </section>
-          </>
+            <input type="text" placeholder="Rechercher..." className="w-full p-4 border rounded-2xl bg-white" onChange={(e) => setSearchTerm(e.target.value)} />
+            {todos.filter(t => t.title.toLowerCase().includes(searchTerm.toLowerCase())).map(todo => (
+              <div key={todo.id} className="flex items-center justify-between p-6 bg-white rounded-2xl border shadow-sm">
+                <div><h4 className="font-bold">{todo.title}</h4><p className="text-sm text-gray-500">{todo.description}</p></div>
+                <button onClick={() => deleteTodo(todo.id)} className="px-4 py-2 bg-red-50 text-red-600 rounded-lg font-bold hover:bg-red-600 hover:text-white transition-all">Supprimer</button>
+              </div>
+            ))}
+          </div>
         ) : (
-          /* --- AUTH (SI DÉCONNECTÉ) --- */
-          <div className="max-w-md mx-auto mt-10 space-y-8 bg-white p-10 rounded-2xl shadow-xl border border-gray-100">
-            <div className="text-center">
-              <h2 className="text-3xl font-extrabold text-gray-900">{isRegistering ? 'Créer un compte' : 'Bon retour !'}</h2>
-              <p className="text-gray-500 mt-2">Gérez vos liens efficacement.</p>
+          <div className="space-y-8 animate-in fade-in duration-500">
+            {/* Statistiques */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-indigo-100">
+                <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">Chiffre d'Affaires (HT)</p>
+                <p className="text-2xl font-black text-indigo-600">
+                  {invoices.filter(i => i.status === 'PAID').reduce((acc, inv) => acc + parseFloat(inv.total_ht || 0), 0).toFixed(2)} €
+                </p>
+              </div>
+              <div className="bg-white p-6 rounded-2xl shadow-sm">
+                <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">Clients</p>
+                <p className="text-2xl font-black text-gray-800">{clients.length}</p>
+              </div>
+              <div className="bg-white p-6 rounded-2xl shadow-sm">
+                <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">En attente (HT)</p>
+                <p className="text-2xl font-black text-orange-500">
+                  {invoices.filter(i => i.status === 'PENDING').reduce((acc, inv) => acc + parseFloat(inv.total_ht || 0), 0).toFixed(2)} €
+                </p>
+              </div>
             </div>
-            <form className="mt-8 space-y-4" onSubmit={isRegistering ? handleRegister : handleLogin}>
-              {errorMsg && <p className="text-red-500 text-sm text-center bg-red-50 py-2 rounded-lg">{errorMsg}</p>}
-              <input type="text" required className="w-full px-4 py-3 border rounded-xl outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Nom d'utilisateur" value={username} onChange={(e) => setUsername(e.target.value)} />
-              {isRegistering && (
-                <input type="email" className="w-full px-4 py-3 border rounded-xl outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} />
+
+            {/* Clients */}
+            <div className="bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100">
+              <div className="p-6 bg-indigo-900 text-white flex justify-between items-center">
+                <h3 className="font-bold">Mes Clients</h3>
+                <button onClick={() => setShowClientForm(!showClientForm)} className="bg-white text-indigo-900 px-4 py-2 rounded-lg text-sm font-bold">
+                  {showClientForm ? 'Fermer' : '+ Nouveau Client'}
+                </button>
+              </div>
+              {showClientForm && (
+                <form onSubmit={addClient} className="p-6 bg-gray-50 border-b grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <input type="text" placeholder="Nom" className="p-2 border rounded-lg" value={clientName} onChange={e => setClientName(e.target.value)} required />
+                  <input type="email" placeholder="Email" className="p-2 border rounded-lg" value={clientEmail} onChange={e => setClientEmail(e.target.value)} required />
+                  <input type="text" placeholder="Adresse" className="p-2 border rounded-lg" value={clientAddress} onChange={e => setClientAddress(e.target.value)} />
+                  <button className="md:col-span-3 bg-indigo-600 text-white py-2 rounded-lg font-bold">Enregistrer</button>
+                </form>
               )}
-              <input type="password" required className="w-full px-4 py-3 border rounded-xl outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Mot de passe" value={password} onChange={(e) => setPassword(e.target.value)} />
-              <button type="submit" className="w-full py-4 bg-indigo-600 text-white font-bold rounded-xl shadow-lg hover:bg-indigo-700">
-                {isRegistering ? "S'inscrire" : "Se connecter"}
-              </button>
-            </form>
-            <div className="text-center pt-4">
-              <button onClick={() => { setIsRegistering(!isRegistering); setErrorMsg(''); }} className="text-sm text-indigo-600 font-semibold hover:underline">
-                {isRegistering ? "Déjà membre ? Connectez-vous" : "Pas encore de compte ? Inscrivez-vous"}
-              </button>
+              <div className="p-4">
+                <table className="w-full">
+                  <thead className="text-xs text-gray-400 uppercase">
+                    <tr><th className="p-2 text-left">Nom</th><th className="p-2 text-left">Email</th><th className="p-2 text-right">Action</th></tr>
+                  </thead>
+                  <tbody>
+                    {clients.map(c => (
+                      <tr key={c.id} className="border-t">
+                        <td className="p-3 text-sm font-bold">{c.name}</td>
+                        <td className="p-3 text-sm text-gray-500">{c.email}</td>
+                        <td className="p-3 text-right">
+                          <button onClick={() => setSelectedClientForInvoice(c)} className="text-indigo-600 text-xs font-bold">Facturer</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Création Facture */}
+            {selectedClientForInvoice && (
+              <form onSubmit={createInvoice} className="p-6 bg-indigo-50 rounded-2xl border-2 border-indigo-100 flex gap-4">
+                <input placeholder="Description" className="flex-1 p-2 rounded" value={invoiceLabel} onChange={e => setInvoiceLabel(e.target.value)} required />
+                <input placeholder="Montant HT" className="w-24 p-2 rounded" value={invoiceAmount} onChange={e => setInvoiceAmount(e.target.value)} required />
+                <button className="bg-indigo-600 text-white px-4 rounded font-bold">Créer</button>
+              </form>
+            )}
+
+            {/* Historique */}
+            <div className="space-y-4">
+              <h3 className="font-bold text-gray-400 text-xs uppercase text-left">Historique</h3>
+              {invoices.length === 0 && <p className="text-gray-400 text-sm italic text-left">Aucune facture.</p>}
+              {invoices.map(inv => (
+                <div key={inv.id} className="bg-white p-5 rounded-2xl shadow-sm border flex justify-between items-center">
+                  <div className="text-left">
+                    <p className="font-bold">{inv.label}</p>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${inv.status === 'PAID' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
+                      {inv.status === 'PAID' ? 'PAYÉE' : 'EN ATTENTE'}
+                    </span>
+                  </div>
+                  <div className="flex gap-4 items-center">
+                    <span className="font-black text-lg">{parseFloat(inv.total_ttc).toFixed(2)} €</span>
+                    <button onClick={() => downloadInvoicePDF(inv)} className="p-2 text-gray-400 hover:text-indigo-600">📄</button>
+                    {inv.status === 'PENDING' && (
+                      <button onClick={() => markAsPaid(inv.id)} className="bg-green-500 text-white p-2 rounded-full hover:bg-green-600">✔</button>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         )}
